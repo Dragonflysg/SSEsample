@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>SSE demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0.25rem; }
+    .panel { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    .clock { font-size: 2rem; font-family: monospace; }
+    #log { background: #f6f6f6; padding: 0.75rem; border-radius: 6px; min-height: 6rem; font-family: monospace; white-space: pre-wrap; }
+    input[type=text] { padding: 0.4rem; width: 60%; }
+    button { padding: 0.4rem 0.8rem; }
+    small { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>Server-Sent Events demo</h1>
+  <p><small>One-way: server &rarr; client, over a plain HTTP connection.</small></p>
+
+  <div class="panel">
+    <h3>1. Time stream</h3>
+    <p><small>Server pushes the current time every second from <code>/stream/time</code>.</small></p>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+
+  <div class="panel">
+    <h3>2. Broadcast (named event)</h3>
+    <p><small>
+      POST a message below &mdash; the server pushes it to every connected client
+      on <code>/stream/broadcast</code> as a named <code>chat</code> event.
+      Open this page in two browser tabs to see it in action.
+    </small></p>
+    <form id="form">
+      <input type="text" id="text" placeholder="Type a message and press send" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+    <div id="log"></div>
+  </div>
+
+  <script>
+    // --- Stream 1: time ----------------------------------------------------
+    // EventSource is the built-in browser API for SSE. It auto-reconnects
+    // if the connection drops, which is one of the big wins over raw WebSockets.
+    const timeStream = new EventSource('/stream/time');
+    timeStream.onmessage = (e) => {
+      // .onmessage fires for unnamed events (i.e. "data: ..." with no "event:" line)
+      document.getElementById('clock').textContent = e.data;
+    };
+
+    // --- Stream 2: broadcast ----------------------------------------------
+    const broadcastStream = new EventSource('/stream/broadcast');
+    const log = document.getElementById('log');
+
+    // Because the server tags these as "event: chat", we listen for that name.
+    // This is the MQTT-topic-like pattern: one connection, multiple event types.
+    broadcastStream.addEventListener('chat', (e) => {
+      const msg = JSON.parse(e.data);
+      log.textContent += `[${msg.at}] ${msg.text}\n`;
+    });
+
+    // Form: POSTs to /broadcast, which fans out via the SSE stream above.
+    document.getElementById('form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById('text');
+      const body = new URLSearchParams({ text: input.value });
+      await fetch('/broadcast', { method: 'POST', body });
+      input.value = '';
+    });
+  </script>
+</body>
+</html>
