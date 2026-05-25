@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>SSE demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0.25rem; }
+    .panel { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    .clock { font-size: 2rem; font-family: monospace; }
+    #log { background: #f6f6f6; padding: 0.75rem; border-radius: 6px; min-height: 6rem; font-family: monospace; white-space: pre-wrap; }
+    input[type=text] { padding: 0.4rem; width: 60%; }
+    button { padding: 0.4rem 0.8rem; }
+    small { color: #666; }
+
+    /* Popup */
+    .backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); }
+    .backdrop.open { display: block; }
+    .popup { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+             background: white; border-radius: 8px; padding: 1.5rem; width: 90%; max-width: 560px;
+             box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+    .popup-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+
+    /* Connection status pill */
+    .status { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.8rem; }
+    .status.off { background: #eee; color: #666; }
+    .status.on  { background: #d4f4dd; color: #1a6c2e; }
+  </style>
+</head>
+<body>
+  <h1>Server-Sent Events demo</h1>
+  <p><small>One-way: server &rarr; client, over a plain HTTP connection.</small></p>
+
+  <div class="panel">
+    <h3>1. Time stream</h3>
+    <p><small>Server pushes the current time every second from <code>/stream/time</code>.</small></p>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+
+  <div class="panel">
+    <h3>2. Broadcast (opens SSE only while popup is visible)</h3>
+    <p><small>
+      The SSE connection to <code>/stream/broadcast</code> is created when you open the popup,
+      and closed when you hide it. Open this page in two tabs to see broadcasts fan out.
+    </small></p>
+    <button id="openBtn">Open broadcast popup</button>
+    <span id="status" class="status off">disconnected</span>
+  </div>
+
+  <!-- Popup -->
+  <div id="backdrop" class="backdrop">
+    <div class="popup">
+      <div class="popup-header">
+        <h3 style="margin:0">Broadcasts</h3>
+        <button id="closeBtn">Close</button>
+      </div>
+      <form id="form">
+        <input type="text" id="text" placeholder="Type a message and press send" autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+      <div id="log"></div>
+    </div>
+  </div>
+
+  <script>
+    // --- Stream 1: time (still always-on, just for the clock demo) --------
+    const timeStream = new EventSource('/stream/time');
+    timeStream.onmessage = (e) => {
+      document.getElementById('clock').textContent = e.data;
+    };
+
+    // --- Stream 2: broadcast — opened/closed manually ---------------------
+    const openBtn  = document.getElementById('openBtn');
+    const closeBtn = document.getElementById('closeBtn');
+    const backdrop = document.getElementById('backdrop');
+    const status   = document.getElementById('status');
+    const log      = document.getElementById('log');
+
+    // We hold the EventSource in a variable so we can close() it later.
+    // null means "not connected right now".
+    let broadcastStream = null;
+
+    function openPopup() {
+      backdrop.classList.add('open');
+
+      // Create the connection ONLY when the popup opens.
+      // The server's stream_broadcast() runs now, creating this client's queue.
+      broadcastStream = new EventSource('/stream/broadcast');
+
+      broadcastStream.addEventListener('open', () => {
+        status.textContent = 'connected';
+        status.className = 'status on';
+      });
+
+      broadcastStream.addEventListener('chat', (e) => {
+        const msg = JSON.parse(e.data);
+        log.textContent += `[${msg.at}] ${msg.text}\n`;
+      });
+
+      broadcastStream.addEventListener('error', () => {
+        // EventSource auto-reconnects on errors. If you don't want that,
+        // call close() here too.
+        status.textContent = 'reconnecting…';
+        status.className = 'status off';
+      });
+    }
+
+    function closePopup() {
+      backdrop.classList.remove('open');
+
+      // Drop the connection. The browser sends a TCP FIN; on the server side,
+      // Flask stops iterating the generator, the `finally` block in
+      // stream_broadcast() removes this client's queue from `subscribers`.
+      if (broadcastStream) {
+        broadcastStream.close();
+        broadcastStream = null;
+      }
+      status.textContent = 'disconnected';
+      status.className = 'status off';
+    }
+
+    openBtn.addEventListener('click', openPopup);
+    closeBtn.addEventListener('click', closePopup);
+
+    // Bonus: close if the user clicks the dark backdrop area outside the popup.
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) closePopup();
+    });
+
+    // Form: POSTs to /broadcast. Works regardless of whether THIS tab is
+    // currently connected — it triggers the fan-out to whoever IS connected.
+    document.getElementById('form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById('text');
+      const body = new URLSearchParams({ text: input.value });
+      await fetch('/broadcast', { method: 'POST', body });
+      input.value = '';
+    });
+  </script>
+</body>
+</html>

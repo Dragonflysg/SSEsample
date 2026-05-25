@@ -1,0 +1,33 @@
+Done. Open the popup → status turns green and you'll start receiving broadcasts. Close it → connection drops, status goes gray. Open it again → fresh connection, fresh queue on the server.
+
+  The mechanics, in three lines
+
+  let broadcastStream = null;                                // not connected yet
+  broadcastStream = new EventSource('/stream/broadcast');    // connects NOW
+  broadcastStream.close();                                   // disconnects NOW
+
+  EventSource is lazy — nothing happens until you call new EventSource(...). And .close() immediately tears down the connection. Set the variable back to null so you don't accidentally try to use a
+  closed stream.
+
+  What happens on the server side when you .close()
+
+  You don't have to do anything — the cleanup is automatic. Step by step:
+
+  1. Browser sends a TCP FIN to the server.
+  2. Flask tries to write the next yielded chunk to that connection, the write fails (broken pipe).
+  3. Flask stops iterating the gen() generator.
+  4. The generator's try/finally runs, and subscribers.remove(q) removes this client's mailbox from the global list.
+  5. Garbage collector eventually frees the queue object.
+
+  That finally block is the whole reason the demo cleans up correctly — without it, closed clients would leak queues forever and broadcasts would still try to q.put() into dead mailboxes.
+
+  A few things worth knowing
+
+  1. Auto-reconnect. If the network blips while the popup is open, EventSource will silently reconnect by itself. That triggers a fresh call to stream_broadcast() on the server — meaning a new
+  queue. Any message broadcast during the disconnect window is lost. If that matters, give each message a server-side ID and use the Last-Event-ID header to resume; otherwise, fire-and-forget is
+  fine for banner broadcasts.
+  2. Browser tab in background. Most browsers keep EventSource alive in background tabs, but some will throttle or close after long inactivity (especially mobile). Don't rely on a connection being
+  open for hours of idle time without verifying.
+  3. One connection per opened popup. If a user spam-clicks "open," each click would create another EventSource. The code above prevents that by only assigning when null — but if you let users
+  reopen quickly, consider guarding openPopup with if (broadcastStream) return; to be safe.
+  4. Page navigation / refresh. The browser closes EventSource automatically on page unload, so you don't need a beforeunload handler. The server-side finally still fires.
